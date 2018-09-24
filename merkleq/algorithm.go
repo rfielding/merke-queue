@@ -2,7 +2,6 @@ package merkleq
 
 import (
 	"crypto/sha256"
-	"log"
 	"sync"
 )
 
@@ -44,6 +43,10 @@ func NewQueue(bits uint) (*Queue, error) {
 // We seek to the n-th slot, and go down r rings
 //
 func (q *Queue) IndexOf(m uint, r uint) uint {
+	return q.Down( q.IndexOfRoot(m), m, r)
+}
+
+func (q *Queue) IndexOfRoot(m uint) uint {
 	p := uint(0)
 	for k := uint(0); k < q.IndexBits; k++ {
 		pow2 := uint(1 << k)
@@ -52,6 +55,10 @@ func (q *Queue) IndexOf(m uint, r uint) uint {
 			p += (2*pow2 - 1)
 		}
 	}
+	return (p + 2) % (1 << q.IndexBits)
+}
+
+func (q *Queue) Down(p uint, m uint, r uint) uint {
 	for ri := uint(1); ri <= r; ri++ {
 		bit := (m & (1 << (ri - 1))) >> (ri - 1)
 		if bit == 0 {
@@ -60,8 +67,7 @@ func (q *Queue) IndexOf(m uint, r uint) uint {
 			p += 1
 		}
 	}
-	p = (p + 2) % (1 << q.IndexBits)
-	return p
+	return p % (1 << q.IndexBits)
 }
 
 // Append writes an entry to the log,
@@ -74,17 +80,15 @@ func (q *Queue) Append(h [32]byte) {
 	m := uint(q.Head % mod)
 	p := q.IndexOf(m, 0)
 	q.Hashes[p] = h
-	log.Printf("updated %d -> %d", m, p)
 	// Fix up parent hashes
 	for r := uint(1); r < q.IndexBits; r++ {
 		p = q.IndexOf(m, r)
 		rightLeaf := p + uint(2*mod - uint64(r))
 		//XXX BUG -- some issue with physical vs logical indices
-		leftLeaf := p + uint(2*mod - uint64(2*(1<<r) + 2))
-		rp := q.IndexOf(rightLeaf, r-1)
-		lp := q.IndexOf(leftLeaf, r-1)
+		leftLeaf := p + uint(2*mod - uint64(2*(1<<r) - 2))
+		rp := q.Down(rightLeaf, m, r-1)
+		lp := q.Down(leftLeaf, m, r-1)
 		q.Hashes[p] = sha256.Sum256(append(q.Hashes[lp][:], q.Hashes[rp][:]...))
-		log.Printf("updated %d -> %d via L:%d R:%d  :", m, p, lp, rp)
 	}
 	q.Head++
 	if q.Head == 0 {
