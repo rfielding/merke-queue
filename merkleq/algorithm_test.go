@@ -40,8 +40,9 @@ func TestIndexing(t *testing.T) {
 	q.Append(sha256.Sum256([]byte("another test.")))
 	fmt.Printf("%s\n", hex.EncodeToString(q.Hashes[0][:]))
 
-	for i := 0; i < 23; i++ {
+	for i := 0; i < 432; i++ {
 		q.Append(sha256.Sum256([]byte(fmt.Sprintf("another test %d.", i))))
 		fmt.Printf("%s\n", hex.EncodeToString(q.Hashes[0][:]))
 	}
+
 }

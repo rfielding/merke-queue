@@ -1,6 +1,7 @@
 package merkleq
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"sync"
 )
@@ -43,7 +44,7 @@ func NewQueue(bits uint) (*Queue, error) {
 // We seek to the n-th slot, and go down r rings
 //
 func (q *Queue) IndexOf(m uint, r uint) uint {
-	return q.Down( q.IndexOfRoot(m), m, r)
+	return q.Down(q.IndexOfRoot(m), m, r)
 }
 
 func (q *Queue) IndexOfRoot(m uint) uint {
@@ -70,6 +71,18 @@ func (q *Queue) Down(p uint, m uint, r uint) uint {
 	return p % (1 << q.IndexBits)
 }
 
+func (q *Queue) Left(p uint, r uint) uint {
+	mod := uint64(1 << q.IndexBits)
+	return (p - (1 << r) + uint(2*mod)) % uint(mod)
+}
+
+func (q *Queue) Right(p uint, r uint) uint {
+	mod := uint64(1 << q.IndexBits)
+	return (p - 1 + uint(2*mod)) % uint(mod)
+}
+
+var allZeroes = *new([32]byte)
+
 // Append writes an entry to the log,
 // - we hash up the tree
 // - move the head forward
@@ -83,12 +96,24 @@ func (q *Queue) Append(h [32]byte) {
 	// Fix up parent hashes
 	for r := uint(1); r < q.IndexBits; r++ {
 		p = q.IndexOf(m, r)
-		rightLeaf := p + uint(2*mod - uint64(r))
-		//XXX BUG -- some issue with physical vs logical indices
-		leftLeaf := p + uint(2*mod - uint64(2*(1<<r) - 2))
-		rp := q.Down(rightLeaf, m, r-1)
-		lp := q.Down(leftLeaf, m, r-1)
-		q.Hashes[p] = sha256.Sum256(append(q.Hashes[lp][:], q.Hashes[rp][:]...))
+		lp := q.Left(p, r)
+		rp := q.Right(p, r)
+		zeroes := allZeroes[:]
+		leftzeroes := bytes.Compare(zeroes, q.Hashes[lp][:]) == 0
+		rightzeroes := bytes.Compare(zeroes, q.Hashes[rp][:]) == 0
+		if (leftzeroes && rightzeroes) == false {
+			if leftzeroes {
+				q.Hashes[p] = q.Hashes[rp]
+			} else {
+				if rightzeroes {
+					q.Hashes[p] = q.Hashes[lp]
+				} else {
+					q.Hashes[p] = sha256.Sum256(
+						append(q.Hashes[lp][:], q.Hashes[rp][:]...),
+					)
+				}
+			}
+		}
 	}
 	q.Head++
 	if q.Head == 0 {
