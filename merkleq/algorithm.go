@@ -71,19 +71,20 @@ func (q *Queue) Append(h [32]byte) {
 	mod := uint64(1 << q.IndexBits)
 	q.Mutex.Lock()
 	// Write this hash to the head
-	m := q.Head
-	p := q.IndexOf(uint(m%mod), 0)
+	m := uint(q.Head % mod)
+	p := q.IndexOf(m, 0)
 	q.Hashes[p] = h
 	log.Printf("updated %d -> %d", m, p)
 	// Fix up parent hashes
 	for r := uint(1); r < q.IndexBits; r++ {
-		p = q.IndexOf(uint(m%mod), r)
-		rightLeaf := p - r
-		leftLeaf := rightLeaf + uint(2*mod) - (1 << (r - 1))
+		p = q.IndexOf(m, r)
+		rightLeaf := p + uint(2*mod - uint64(r))
+		//XXX BUG -- some issue with physical vs logical indices
+		leftLeaf := p + uint(2*mod - uint64(2*(1<<r) + 2))
 		rp := q.IndexOf(rightLeaf, r-1)
 		lp := q.IndexOf(leftLeaf, r-1)
 		q.Hashes[p] = sha256.Sum256(append(q.Hashes[lp][:], q.Hashes[rp][:]...))
-		log.Printf("updated %d -> %d", m, p)
+		log.Printf("updated %d -> %d via L:%d R:%d  :", m, p, lp, rp)
 	}
 	q.Head++
 	if q.Head == 0 {
