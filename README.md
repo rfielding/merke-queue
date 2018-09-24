@@ -29,7 +29,4 @@ Notice that a Heap,
 - Uses its index in the array to calculate what its parents are.
 - If nodes expire in order, then we can use mod 2^n indexing to allow new entries to overwrite spots where old ones expire.
 
-```
-parentOf[n] = 
-```
 
