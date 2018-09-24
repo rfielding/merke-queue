@@ -89,6 +89,6 @@ func (q *Queue) Append(h [32]byte) {
 	if q.Head == 0 {
 		q.Epoch++
 	}
-	q.Head = q.Head % (q.IndexBits)
+	q.Head = q.Head % uint64(q.IndexBits)
 	q.Mutex.Unlock()
 }
