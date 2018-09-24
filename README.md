@@ -1,6 +1,7 @@
 Merkle Queue
 ============
 
+(merklequeue.png)[merklequeue.png]
 The use of Merkle Tree structures for append-only logs creates a space-usage issue.
 Ideally, entries in the tree could have an explicit expiration date.
 
