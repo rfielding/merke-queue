@@ -16,7 +16,7 @@ func indexTest(t *testing.T, q *merkleq.Queue, m uint, r uint, x uint) {
 }
 
 func TestIndexing(t *testing.T) {
-	q, err := merkleq.NewQueue(8)
+	q, err := merkleq.NewQueue(10)
 	if err != nil {
 		t.FailNow()
 	}
@@ -27,9 +27,11 @@ func TestIndexing(t *testing.T) {
 	indexTest(t, q, 0, 1, 4)
 	indexTest(t, q, 0, 2, 8)
 	indexTest(t, q, 1, 1, 4)
-	indexTest(t, q, 255, 0, 248)
-	indexTest(t, q, 255, 0, 248)
-	indexTest(t, q, 255, 0, 248)
+	indexTest(t, q, 97, 0, 193)
+	indexTest(t, q, 91, 3, 189)
+	indexTest(t, q,100, 3, 206)
+	indexTest(t, q,100, 3, q.Left(222,4))
+	indexTest(t, q,111, 2, q.Right(221))
 
 	// Add some things and verify that hashes change
 	fmt.Printf("%s\n", hex.EncodeToString(q.Hashes[0][:]))
@@ -42,7 +44,6 @@ func TestIndexing(t *testing.T) {
 
 	for i := 0; i < 432; i++ {
 		q.Append(sha256.Sum256([]byte(fmt.Sprintf("another test %d.", i))))
-		fmt.Printf("%s\n", hex.EncodeToString(q.Hashes[0][:]))
 	}
 
 }

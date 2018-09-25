@@ -71,12 +71,12 @@ func (q *Queue) Down(p uint, m uint, r uint) uint {
 	return p % (1 << q.IndexBits)
 }
 
-func (q *Queue) Left(p uint, r uint) uint {
+func (q *Queue) Left(p uint,r uint) uint {
 	mod := uint64(1 << q.IndexBits)
 	return (p - (1 << r) + uint(2*mod)) % uint(mod)
 }
 
-func (q *Queue) Right(p uint, r uint) uint {
+func (q *Queue) Right(p uint) uint {
 	mod := uint64(1 << q.IndexBits)
 	return (p - 1 + uint(2*mod)) % uint(mod)
 }
@@ -96,8 +96,8 @@ func (q *Queue) Append(h [32]byte) {
 	// Fix up parent hashes
 	for r := uint(1); r < q.IndexBits; r++ {
 		p = q.IndexOf(m, r)
-		lp := q.Left(p, r)
-		rp := q.Right(p, r)
+		lp := q.Left(p,r)
+		rp := q.Right(p)
 		zeroes := allZeroes[:]
 		leftzeroes := bytes.Compare(zeroes, q.Hashes[lp][:]) == 0
 		rightzeroes := bytes.Compare(zeroes, q.Hashes[rp][:]) == 0
