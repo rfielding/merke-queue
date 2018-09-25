@@ -3,22 +3,167 @@ package merkleq
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
+	"log"
+	"os"
 	"sync"
 )
 
-type Queue struct {
-	Mutex     sync.RWMutex
-	IndexBits uint
+const HashSize = 32
+
+type State struct {
+	IndexBits uint32
+	Epoch     uint32
 	Head      uint64
-	Epoch     uint64
-	Hashes    [][32]byte
 }
 
-func NewQueue(bits uint) (*Queue, error) {
-	return &Queue{
-		IndexBits: bits,
-		Hashes:    make([][32]byte, (1 << bits)),
-	}, nil
+type Queue struct {
+	Fname string
+	State State
+	File  *os.File
+	Mutex sync.RWMutex
+}
+
+func LogInfo(msg string, args ...interface{}) {
+	log.Printf("INFO:"+msg, args...)
+}
+
+func LogDebug(msg string, args ...interface{}) {
+	if os.Getenv("MERKLE_DEBUG") == "true" {
+		log.Printf("DEBUG:"+msg, args...)
+	}
+}
+
+func seek(f *os.File, n int64) error {
+	LogDebug("Seek %d * 32", n/32)
+	_, err := f.Seek(n, 0)
+	return err
+}
+
+func NewQueue(fname string, bits uint32) (*Queue, error) {
+	LogDebug("looking for the file")
+	var f *os.File
+	wasCreated := false
+	_, err := os.Stat(fname)
+	if os.IsNotExist(err) {
+		LogDebug("create the file empty")
+		f, err = os.Create(fname)
+		if err != nil {
+			return nil, err
+		}
+		// Write the last byte of the file as a zero
+		err = seek(f, HashSize*(1<<(bits))-1)
+		if err != nil {
+			return nil, err
+		}
+		_, err = f.Write([]byte{0})
+		if err != nil {
+			return nil, err
+		}
+		wasCreated = true
+	} else {
+		if err != nil {
+			return nil, err
+		} else {
+			LogDebug("open existing file")
+			f, err = os.OpenFile(fname, os.O_RDWR, 0700)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	q := &Queue{
+		File:  f,
+		Fname: fname,
+		State: State{
+			IndexBits: bits,
+			Head:      0,
+			Epoch:     0,
+		},
+	}
+	if wasCreated {
+		err = q.WriteState()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		err = q.ReadState()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return q, nil
+}
+
+func (q *Queue) GetHash(p uint64) ([HashSize]byte, error) {
+	LogDebug("getHash %d", p)
+	buf := *new([32]byte)
+	err := seek(q.File, int64(HashSize*p))
+	if err != nil {
+		return buf, err
+	}
+	_, err = q.File.Read(buf[:])
+	return buf, err
+}
+
+func (q *Queue) SetHash(p uint64, buf [HashSize]byte) error {
+	LogDebug("SetHash %d", p)
+	err := seek(q.File, int64(HashSize*p))
+	if err != nil {
+		return err
+	}
+	_, err = q.File.Write(buf[:])
+	return err
+}
+
+func (q *Queue) WriteState() error {
+	LogDebug("WriteState IndexBits: %d Epoch: %d Head: %d", q.State.IndexBits, q.State.Epoch, q.State.Head)
+	buf := make([]byte, HashSize)
+	binary.BigEndian.PutUint32(buf[4:], q.State.IndexBits)
+	binary.BigEndian.PutUint32(buf[4+4:], q.State.Epoch)
+	binary.BigEndian.PutUint64(buf[4+4+8:], q.State.Head)
+	err := seek(q.File, 1*HashSize)
+	if err != nil {
+		return err
+	}
+	_, err = q.File.Write(buf)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (q *Queue) ReadState() error {
+	LogDebug("ReadState")
+	buf := make([]byte, HashSize)
+	err := seek(q.File, 1*HashSize)
+	if err != nil {
+		return err
+	}
+	_, err = q.File.Read(buf)
+	if err != nil {
+		return err
+	}
+	q.State.IndexBits = binary.BigEndian.Uint32(buf[4:])
+	q.State.Epoch = binary.BigEndian.Uint32(buf[4+4:])
+	q.State.Head = binary.BigEndian.Uint64(buf[4+4+8:])
+	LogDebug("Read IndexBits: %d Epoch: %d Head: %d", q.State.IndexBits, q.State.Epoch, q.State.Head)
+	return nil
+}
+
+func (q *Queue) Close() error {
+	LogDebug("Close")
+	return q.File.Close()
+}
+
+func (q *Queue) Delete() error {
+	LogDebug("Delete")
+	_, err := os.Stat(q.Fname)
+	if os.IsExist(err) {
+		return os.Remove(q.Fname)
+	}
+	return err
 }
 
 // IndexOf gets the physical index of ring 0 (outer ring)
@@ -43,24 +188,26 @@ func NewQueue(bits uint) (*Queue, error) {
 //
 // We seek to the n-th slot, and go down r rings
 //
-func (q *Queue) IndexOf(m uint, r uint) uint {
-	return q.Down(q.IndexOfRoot(m), m, r)
+func (q *Queue) IndexOf(m uint64, r uint32) uint64 {
+	LogDebug("IndexOf %d", m)
+	return q.Down(q.indexOfRoot(m), m, r)
 }
 
-func (q *Queue) IndexOfRoot(m uint) uint {
-	p := uint(0)
-	for k := uint(0); k < q.IndexBits; k++ {
-		pow2 := uint(1 << k)
+func (q *Queue) indexOfRoot(m uint64) uint64 {
+	p := uint64(0)
+	for k := uint32(0); k < q.State.IndexBits; k++ {
+		pow2 := uint64(1 << k)
 		bit := (m & pow2) >> k
 		if bit != 0 {
 			p += (2*pow2 - 1)
 		}
 	}
-	return (p + 2) % (1 << q.IndexBits)
+	return (p + 2) % (1 << q.State.IndexBits)
 }
 
-func (q *Queue) Down(p uint, m uint, r uint) uint {
-	for ri := uint(1); ri <= r; ri++ {
+func (q *Queue) Down(p uint64, m uint64, r uint32) uint64 {
+	for ri := uint32(1); ri <= r; ri++ {
+		LogDebug("Down %d %d %d", p, m, r)
 		bit := (m & (1 << (ri - 1))) >> (ri - 1)
 		if bit == 0 {
 			p += (1 << ri)
@@ -68,17 +215,17 @@ func (q *Queue) Down(p uint, m uint, r uint) uint {
 			p += 1
 		}
 	}
-	return p % (1 << q.IndexBits)
+	return p % (1 << q.State.IndexBits)
 }
 
-func (q *Queue) Left(p uint,r uint) uint {
-	mod := uint64(1 << q.IndexBits)
-	return (p - (1 << r) + uint(2*mod)) % uint(mod)
+func (q *Queue) Left(p uint64, r uint32) uint64 {
+	mod := uint64(1 << q.State.IndexBits)
+	return (p - (1 << r) + uint64(2*mod)) % uint64(mod)
 }
 
-func (q *Queue) Right(p uint) uint {
-	mod := uint64(1 << q.IndexBits)
-	return (p - 1 + uint(2*mod)) % uint(mod)
+func (q *Queue) Right(p uint64) uint64 {
+	mod := uint64(1 << q.State.IndexBits)
+	return (p - 1 + uint64(2*mod)) % uint64(mod)
 }
 
 var allZeroes = *new([32]byte)
@@ -86,39 +233,61 @@ var allZeroes = *new([32]byte)
 // Append writes an entry to the log,
 // - we hash up the tree
 // - move the head forward
-func (q *Queue) Append(h [32]byte) {
-	mod := uint64(1 << q.IndexBits)
+func (q *Queue) Append(h [32]byte) error {
+	LogDebug("Append")
+	mod := uint64(1 << q.State.IndexBits)
 	q.Mutex.Lock()
+	defer q.Mutex.Unlock()
 	// Write this hash to the head
-	m := uint(q.Head % mod)
+	m := uint64(q.State.Head % mod)
 	p := q.IndexOf(m, 0)
-	q.Hashes[p] = h
+	err := q.SetHash(p, h)
+	if err != nil {
+		return err
+	}
 	// Fix up parent hashes
-	for r := uint(1); r < q.IndexBits; r++ {
+	for r := uint32(1); r < q.State.IndexBits; r++ {
 		p = q.IndexOf(m, r)
-		lp := q.Left(p,r)
+		lp := q.Left(p, r)
 		rp := q.Right(p)
 		zeroes := allZeroes[:]
-		leftzeroes := bytes.Compare(zeroes, q.Hashes[lp][:]) == 0
-		rightzeroes := bytes.Compare(zeroes, q.Hashes[rp][:]) == 0
+		hl, err := q.GetHash(lp)
+		if err != nil {
+			return err
+		}
+		leftzeroes := bytes.Compare(zeroes, hl[:]) == 0
+		hr, err := q.GetHash(rp)
+		if err != nil {
+			return err
+		}
+		rightzeroes := bytes.Compare(zeroes, hr[:]) == 0
 		if (leftzeroes && rightzeroes) == false {
 			if leftzeroes {
-				q.Hashes[p] = q.Hashes[rp]
+				q.SetHash(p, hr)
+				if err != nil {
+					return err
+				}
 			} else {
 				if rightzeroes {
-					q.Hashes[p] = q.Hashes[lp]
+					err = q.SetHash(p, hl)
+					if err != nil {
+						return err
+					}
 				} else {
-					q.Hashes[p] = sha256.Sum256(
-						append(q.Hashes[lp][:], q.Hashes[rp][:]...),
-					)
+					err = q.SetHash(p, sha256.Sum256(
+						append(hl[:], hr[:]...),
+					))
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
 	}
-	q.Head++
-	if q.Head == 0 {
-		q.Epoch++
+	q.State.Head++
+	if q.State.Head == 0 {
+		q.State.Epoch++
 	}
-	q.Head = q.Head % uint64(q.IndexBits)
-	q.Mutex.Unlock()
+	q.State.Head = q.State.Head % uint64(q.State.IndexBits)
+	return q.WriteState()
 }
